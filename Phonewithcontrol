@@ -1,0 +1,149 @@
+from picrawler import Picrawler
+from robot_hat import TTS, Music
+from robot_hat import Ultrasonic
+from robot_hat import Pin
+from bleak import BleakScanner
+import time
+import ssd1306
+import math
+import keyboard  # Import the keyboard library
+
+tts = TTS()
+music = Music()
+
+crawler = Picrawler() 
+sonar = Ultrasonic(Pin("D2"), Pin("D3"))
+music.music_set_volume(100)
+
+# Initialize I2C and OLED display
+i2c = I2C(scl=Pin(5), sda=Pin(4))
+oled_width = 128
+oled_height = 64
+oled = ssd1306.SSD1306_I2C(oled_width, oled_height, i2c)
+
+# Clear the OLED display at startup
+oled.fill(0)
+oled.show()
+
+alert_distance = 15
+speed = 150  # 150% of max speed
+phone_mac_address = "DC:C4:9C:77:4E:43"  # Your phone's Bluetooth MAC address
+recalibration_interval = 5  # Time in seconds to stop and recalibrate
+
+# Initialize the orientation angle
+orientation_angle = 0
+camera_on = False  # Camera state
+manual_control = False  # Manual control state
+
+def find_phone():
+    try:
+        devices = BleakScanner.discover()
+        for device in devices:
+            if device.address == phone_mac_address:
+                return True
+    except Exception as e:
+        print(f"Error during Bluetooth scan: {e}")
+    return False
+
+def draw_needle(angle):
+    oled.fill(0)
+    center_x = oled_width // 2
+    center_y = oled_height // 2
+    radius = min(center_x, center_y) - 5
+
+    # Draw circle
+    oled.circle(center_x, center_y, radius, 1)
+
+    # Calculate needle end point
+    end_x = center_x + int(radius * math.cos(math.radians(angle)))
+    end_y = center_y + int(radius * math.sin(math.radians(angle)))
+
+    # Draw needle
+    oled.line(center_x, center_y, end_x, end_y, 1)
+    oled.show()
+
+def toggle_camera():
+    global camera_on
+    camera_on = not camera_on
+    if camera_on:
+        print("Camera turned ON")
+        # Add your camera initialization code here
+    else:
+        print("Camera turned OFF")
+        # Add your camera shutdown code here
+
+def toggle_manual_control():
+    global manual_control
+    manual_control = not manual_control
+    if manual_control:
+        print("Manual control ON")
+    else:
+        print("Manual control OFF")
+
+def main():
+    global orientation_angle, speed, manual_control
+    start_time = time.time()
+    while True:
+        if not manual_control:
+            phone_found = find_phone()
+            distance = sonar.read()
+            print(f"Distance: {distance}, Phone Found: {phone_found}")
+            
+            if phone_found:
+                # Draw needle pointing towards the phone
+                draw_needle(orientation_angle)
+                
+                if distance < 0:
+                    pass
+                elif distance <= alert_distance:
+                    try:
+                        music.sound_play_threading('./sounds/sign.wav', volume=100)
+                    except Exception as e:
+                        print(e)
+                    crawler.do_action('turn left angle', 3, speed)
+                    orientation_angle = (orientation_angle + 90) % 360  # Update orientation
+                    time.sleep(0.2)
+                else:
+                    crawler.do_action('forward', 1, speed)
+                    time.sleep(0.2)
+            else:
+                # Turn left to search for the phone and update orientation
+                crawler.do_action('turn left angle', 3, speed)
+                orientation_angle = (orientation_angle + 90) % 360  # Update orientation
+                draw_needle(orientation_angle)
+                time.sleep(0.2)
+            
+            # Recalibrate direction periodically
+            if time.time() - start_time >= recalibration_interval:
+                crawler.do_action('stop', 1, speed)
+                time.sleep(1)  # Pause for a moment
+                start_time = time.time()  # Reset the timer
+
+        # Keyboard controls
+        if keyboard.is_pressed('w'):
+            crawler.do_action('forward', 1, speed)
+        elif keyboard.is_pressed('s'):
+            crawler.do_action('backward', 1, speed)
+        elif keyboard.is_pressed('a'):
+            crawler.do_action('turn left', 1, speed)
+        elif keyboard.is_pressed('d'):
+            crawler.do_action('turn right', 1, speed)
+        
+        # Speed controls
+        for i in range(1, 11):
+            if keyboard.is_pressed(str(i)):
+                speed = i * 10
+                print(f"Speed set to {speed}%")
+
+        # Toggle camera
+        if keyboard.is_pressed('c'):
+            toggle_camera()
+            time.sleep(0.5)  # Debounce delay
+
+        # Toggle manual control
+        if keyboard.is_pressed('m'):
+            toggle_manual_control()
+            time.sleep(0.5)  # Debounce delay
+
+if __name__ == "__main__":
+    main()
